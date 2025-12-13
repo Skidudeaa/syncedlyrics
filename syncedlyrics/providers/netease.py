@@ -1,8 +1,15 @@
 """NetEase (music.163.com) china-based provider"""
 
-from typing import Optional
-from rapidfuzz.fuzz import partial_ratio
-from .base import LRCProvider
+import logging
+from typing import Optional, List
+from rapidfuzz.fuzz import partial_ratio, token_sort_ratio
+from requests.exceptions import RequestException
+from .base import LRCProvider, DEFAULT_TIMEOUT
+
+logger = logging.getLogger(__name__)
+
+# Minimum similarity score for fuzzy matching (0-100)
+MIN_SIMILARITY_SCORE = 65
 
 headers = {
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
@@ -30,17 +37,75 @@ class NetEase(LRCProvider):
         super().__init__()
         self.session.headers.update(headers)
 
+    def _get_track_name(self, track: dict) -> str:
+        """Construct a comparable track name from track metadata."""
+        name = track.get("name", "")
+        artists = track.get("artists", [])
+        artist_name = artists[0].get("name", "") if artists else ""
+        return f"{name} {artist_name}".strip().lower()
+
+    def _find_best_match(self, search_term: str, tracks: List[dict]) -> Optional[dict]:
+        """Find the best matching track using fuzzy matching."""
+        search_lower = search_term.lower()
+        best_match = None
+        best_score = 0
+
+        for track in tracks:
+            track_name = self._get_track_name(track)
+            # Use both partial_ratio and token_sort_ratio for better matching
+            score = max(
+                partial_ratio(search_lower, track_name),
+                token_sort_ratio(search_lower, track_name)
+            )
+
+            if score > best_score:
+                best_score = score
+                best_match = track
+
+        if best_score >= MIN_SIMILARITY_SCORE:
+            logger.debug(
+                f"{self.provider_name}: Best match score {best_score:.1f}% for '{search_term}'"
+            )
+            return best_match
+
+        logger.debug(
+            f"{self.provider_name}: No match above {MIN_SIMILARITY_SCORE}% threshold "
+            f"(best was {best_score:.1f}%)"
+        )
+        return None
+
     def search_track(self, search_term: str) -> Optional[dict]:
         """Returns a `dict` containing some metadata for the found track."""
-        params = {"limit": 10, "type": 1, "offset": 0, "s": search_term}
-        response = self.session.get(self.API_ENDPOINT_METADATA, params=params)
-        results = response.json().get("result", {}).get("songs")
-        if not results:
-            return
-        track = results[0]
-        track_name = f"{track.get('name')} {track.get('artists')[0].get('name')}"
-        if partial_ratio(search_term, track_name) < 70:
-            return
+        params = {"limit": 15, "type": 1, "offset": 0, "s": search_term}
+
+        try:
+            response = self.session.get(
+                self.API_ENDPOINT_METADATA,
+                params=params,
+                timeout=DEFAULT_TIMEOUT
+            )
+            response.raise_for_status()
+            data = response.json()
+        except RequestException as e:
+            logger.warning(f"{self.provider_name}: Request failed: {e}")
+            return None
+        except ValueError as e:
+            logger.warning(f"{self.provider_name}: JSON parsing failed: {e}")
+            return None
+
+        try:
+            results = data.get("result", {}).get("songs", [])
+            if not results:
+                return None
+        except (AttributeError, TypeError) as e:
+            logger.debug(f"{self.provider_name}: Failed to parse results: {e}")
+            return None
+
+        # Find best match using fuzzy matching
+        track = self._find_best_match(search_term, results)
+        if not track:
+            return None
+
         # Update the session cookies from the new sent cookies for the next request.
         self.session.cookies.update(response.cookies)
         self.session.headers.update({"referer": response.url})
@@ -48,14 +113,33 @@ class NetEase(LRCProvider):
 
     def get_lrc_by_id(self, track_id: str) -> Optional[str]:
         params = {"id": track_id, "lv": 1}
-        response = self.session.get(self.API_ENDPOINT_LYRICS, params=params)
-        lrc = response.json().get("lrc", {}).get("lyric")
-        if not lrc:
-            return
-        return lrc
+
+        try:
+            response = self.session.get(
+                self.API_ENDPOINT_LYRICS,
+                params=params,
+                timeout=DEFAULT_TIMEOUT
+            )
+            response.raise_for_status()
+            data = response.json()
+        except RequestException as e:
+            logger.warning(f"{self.provider_name}: Request failed: {e}")
+            return None
+        except ValueError as e:
+            logger.warning(f"{self.provider_name}: JSON parsing failed: {e}")
+            return None
+
+        try:
+            lrc = data.get("lrc", {}).get("lyric")
+            if not lrc:
+                return None
+            return lrc
+        except (AttributeError, TypeError) as e:
+            logger.debug(f"{self.provider_name}: Failed to extract LRC: {e}")
+            return None
 
     def get_lrc(self, search_term: str) -> Optional[str]:
         track = self.search_track(search_term)
         if not track:
-            return
+            return None
         return self.get_lrc_by_id(track["id"])
