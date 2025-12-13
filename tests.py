@@ -17,6 +17,12 @@ def test_lyricsify():
 
 def test_megalobiz():
 	_test_provider("Megalobiz")
-	
+
 def test_musixmatch():
 	_test_provider("Musixmatch")
+
+def test_lrclib():
+	_test_provider("Lrclib")
+
+def test_genius():
+	_test_provider("Genius")
