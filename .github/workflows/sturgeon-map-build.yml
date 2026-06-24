@@ -1,8 +1,8 @@
 name: Temporary Sturgeon Lake source build
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches: [sturgeon-map-build-run]
     paths:
       - '.sturgeon_map_work/run-trigger.txt'
   workflow_dispatch:
