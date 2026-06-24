@@ -1,10 +1,10 @@
 name: Temporary Sturgeon Lake source build
 
 on:
-  push:
+  pull_request:
     branches: [main]
     paths:
-      - '.github/workflows/sturgeon-map-build.yml'
+      - '.sturgeon_map_work/run-trigger.txt'
   workflow_dispatch:
 
 permissions:
@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: sturgeon-map-build-run
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -54,7 +56,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add .sturgeon_map_work/output
           git commit -m 'Temporary Sturgeon Lake official source output' || exit 0
-          git push
+          git push origin HEAD:sturgeon-map-build-run
       - uses: actions/upload-artifact@v4
         with:
           name: sturgeon-lake-official-source
